@@ -40,12 +40,12 @@ THIS_FILE = File.expand_path(__FILE__)
 HERE = File.dirname(THIS_FILE)
 HOME = File.join(HERE, "..")
 RES = File.join(HOME, "results")
-tmp_dir = "tmp_dir_" + rand(36**8).to_s(36) # random string with size 8
+$tmp_dir = "tmp_dir_" + rand(36**8).to_s(36) # random string with size 8
 
 require "#{File.join(HERE, "apk")}"
 
 cmds = [
-  "unparse", "htmlunparse", "id", "combine",
+  "unparse", "htmlunparse", "jsonunparse", "id", "combine",
   "info", "classes", "api", "opstat",
   "intent", "cg", "cfg", "dom", "pdom",
   "dump_method", "dependants", "live", "const", "reach",
@@ -61,10 +61,17 @@ sdk = nil
 mtd = nil
 lib = nil
 to = nil
+detail = :none
 outputdir = nil
 
 option_parser = OptionParser.new do |opts|
   opts.banner = "Usage: ruby #{__FILE__} target.(apk|dex) [options]"
+  opts.on("--logging-fine", "turn on fine grained logging") do
+    detail = :fine
+  end    
+  opts.on("--logging-regex", "turn on regex based logging") do
+    detail = :regex
+  end    
   opts.on("--cmd command", cmds, cmds.join(", ")) do |c|
     cmd = c
   end
@@ -118,7 +125,7 @@ case File.extname(fn)
 when ".dex"
   dex = fn
 when ".apk"
-  apk = Apk.new(fn, tmp_dir)
+  apk = Apk.new(fn, $tmp_dir)
   if apk.unpack
     dex = apk.dex
   else
@@ -143,6 +150,34 @@ def dex_succ?(apk, cmd)
   true
 end
 
+def rewrite_and_install(apk,fn,to,res)
+  if not apk.succ
+    puts apk.out
+    close(apk)
+    raise "rewriting dex failed"
+  end
+  apk.add_permission
+  if to
+    apk.repack(to)
+  else
+    apk.repack
+  end
+  if not apk.succ
+    puts apk.out
+    close(apk)
+    raise "repacking apk failed"
+  end
+  # for debugging, leave rewritten dex and xml files
+  system("cp -f #{File.join($tmp_dir, "classes.dex")} #{res}")
+  system("cp -f #{File.join($tmp_dir, "AndroidManifest.xml")} #{res}")
+  # and move the rewritten apk
+  if not to
+    rewritten = File.basename(fn)
+    system("mv -f #{rewritten} #{res}") if apk.succ
+  end
+  puts apk.out if apk.succ
+end
+
 case cmd
 when "unparse"
   if to
@@ -151,11 +186,17 @@ when "unparse"
     yml = Dex.unparse(dex)
     puts yml if dex_succ?(apk, cmd)
   end
-when "htmlunparse"
+when "htmlunparse" 
   if outputdir
     Dex.htmlunparse(dex, outputdir)
   else
     Dex.htmlunparse(dex)
+  end
+when "jsonunparse"
+  if outputdir
+    Dex.jsonunparse(dex, outputdir)
+  else
+    Dex.jsonunparse(dex)
   end
 when "id"
   if to
@@ -250,32 +291,12 @@ when "custom_views", "fragments", "buttons"
     require 'pp'
     PP.pp res
   end
-when "logging", "logging_ui", "directed"
-  apk.send(cmd.to_sym)
-  if not apk.succ
-    puts apk.out
-    close(apk)
-    raise "rewriting dex failed"
-  end
-  if to
-    apk.repack(to)
-  else
-    apk.repack
-  end
-  if not apk.succ
-    puts apk.out
-    close(apk)
-    raise "repacking apk failed"
-  end
-  # for debugging, leave rewritten dex and xml files
-  system("cp -f #{File.join(tmp_dir, "classes.dex")} #{RES}")
-  system("cp -f #{File.join(tmp_dir, "AndroidManifest.xml")} #{RES}")
-  # and move the rewritten apk
-  if not to
-    rewritten = File.basename(fn)
-    system("mv -f #{rewritten} #{RES}") if apk.succ
-  end
-  puts apk.out if apk.succ
+when "logging", "logging_ui"
+  apk.send(cmd.to_sym,detail)
+  rewrite_and_install(apk,fn,to,RES)
+when "directed"
+  apk.directed
+  rewrite_and_install(apk,fn,to,RES)
 when "hello"
   Dex.hello
   system("mv -f classes.dex #{RES}") if dex_succ?(apk, cmd)
